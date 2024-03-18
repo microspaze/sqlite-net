@@ -923,6 +923,7 @@ namespace SQLite
 
 		void MigrateTable (TableMapping map, List<ColumnInfo> existingCols)
 		{
+			var tableName = map.TableName;
 			var toBeAdded = new List<TableMapping.Column> ();
 			var toBeDefaulted = new List<TableMapping.Column> ();
 
@@ -932,7 +933,7 @@ namespace SQLite
 				foreach (var c in existingCols) {
 					found = (string.Compare (p.Name, c.Name, StringComparison.OrdinalIgnoreCase) == 0);
 					if (found) {
-						defaulted = c.dflt_value != null;
+						defaulted = c.dflt_value != null && c.dflt_value == "\"" + p.DefaultValue?.ToString () + "\"";
 						break;
 					}
 				}
@@ -945,13 +946,33 @@ namespace SQLite
 			}
 
 			foreach (var p in toBeAdded) {
-				var addCol = "alter table \"" + map.TableName + "\" add column " + Orm.SqlDecl (p, StoreDateTimeAsTicks, StoreTimeSpanAsTicks);
+				var addCol = "alter table \"" + tableName + "\" add column " + Orm.SqlDecl (p, StoreDateTimeAsTicks, StoreTimeSpanAsTicks);
 				Execute (addCol);
 			}
 
 			foreach (var p in toBeDefaulted) {
-				var updateCol = "update \"" + map.TableName + "\" set \"" + p.Name + "\" = \"" + p.DefaultValue?.ToString () + "\" where \"" + p.Name + "\" is null";
+				var column = p.Name;
+				var updateCol = "update \"" + tableName + "\" set \"" + column + "\" = \"" + p.DefaultValue?.ToString () + "\" where \"" + column + "\" is null";
 				Execute (updateCol);
+
+				//set column default value
+				var columnTemp = p.Name + "_temp_renamed";
+				var renamed = existingCols.Any (x => x.Name.Equals (columnTemp, StringComparison.OrdinalIgnoreCase));
+				if (!renamed) {
+					var renameCol = "alter table \"" + tableName + "\" rename column \"" + column + "\" to \"" + columnTemp + "\"";
+					Execute (renameCol);
+				}
+				var readded = existingCols.Any (x => x.Name.Equals (column, StringComparison.OrdinalIgnoreCase)) || toBeAdded.Any (x => x.Name.Equals (column, StringComparison.OrdinalIgnoreCase));
+				if (!readded || !renamed) {
+					var addCol = "alter table \"" + tableName + "\" add column " + Orm.SqlDecl (p, StoreDateTimeAsTicks, StoreTimeSpanAsTicks);
+					Execute (addCol);
+				}
+				var copyCol = "update \"" + tableName + "\" set \"" + column + "\" = \"" + columnTemp + "\"";
+				var result = Execute (copyCol);
+				if (result > 0) {
+					var deleteCol = "alter table \"" + tableName + "\" drop column \"" + columnTemp + "\"";
+					Execute (deleteCol);
+				}
 			}
 		}
 
